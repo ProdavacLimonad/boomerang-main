@@ -1,0 +1,33 @@
+{
+  "name": "boomerang-mcp-server",
+  "version": "1.0.0",
+  "description": "MCP server implementing Boomerang Tasks workflow orchestration",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test.js",
+    "cli": "node cli.js",
+    "mcp:install": "claude mcp add boomerang node server.js",
+    "mcp:install:global": "claude mcp add --scope user boomerang node server.js",
+    "mcp:remove": "claude mcp remove boomerang",
+    "mcp:list": "claude mcp list",
+    "mcp:logs": "claude mcp logs boomerang"
+  },
+  "bin": {
+    "boomerang": "./cli.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "latest",
+    "commander": "^14.0.0",
+    "node-fetch": "^3.3.2"
+  },
+  "keywords": [
+    "mcp",
+    "boomerang",
+    "orchestration",
+    "tasks"
+  ],
+  "author": "Claude",
+  "license": "MIT"
+}

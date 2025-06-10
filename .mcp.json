@@ -1,0 +1,21 @@
+{
+  "mcpServers": {
+    "boomerang": {
+      "command": "node",
+      "args": ["./server.js"],
+      "env": {
+        "BOOMERANG_STORAGE_PATH": "./storage",
+        "BOOMERANG_LOG_LEVEL": "info",
+        "BOOMERANG_MAX_CONCURRENT_TASKS": "5",
+        "BOOMERANG_TASK_TIMEOUT": "300000"
+      },
+      "description": "Boomerang MCP server pro orchestraci složitých úkolů s izolovaným kontextem",
+      "capabilities": [
+        "task-analysis",
+        "subtask-management",
+        "context-isolation",
+        "result-merging"
+      ]
+    }
+  }
+}
