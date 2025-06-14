@@ -96,20 +96,22 @@ class BoomerangTester {
   }
 
   async testSimpleTask() {
-    console.log('\n🧪 Testing Simple Task (Should Not Break Down)\n');
+    console.log('\n🧪 Testing Simple Task (Complexity Score 1 - Should NOT Break Down)\n');
 
     try {
-      const simpleTaskDescription = 'Fix the typo in the README file';
+      // Test jednoduchého úkolu se skóre 1
+      const simpleTaskDescription = 'Fix typo';
       
       const analyzedTask = await this.orchestrator.analyzeTask(simpleTaskDescription);
       
       console.log(`   Task ID: ${analyzedTask.id}`);
+      console.log(`   Description: "${simpleTaskDescription}"`);
       console.log(`   Should break down: ${analyzedTask.analysis.shouldBreakDown}`);
       console.log(`   Complexity score: ${analyzedTask.analysis.complexity}/10`);
       console.log(`   Reason: ${analyzedTask.analysis.reason}`);
 
       if (analyzedTask.analysis.shouldBreakDown) {
-        console.log('❌ Simple task should NOT be flagged for breakdown');
+        console.log('❌ Simple task with score 1 should NOT be flagged for breakdown');
         return false;
       }
 
@@ -118,6 +120,35 @@ class BoomerangTester {
 
     } catch (error) {
       console.error('❌ Simple task test failed:', error.message);
+      return false;
+    }
+  }
+
+  async testMediumComplexityTask() {
+    console.log('\n🎆 Testing Medium Complexity Task (Score 2+ - Should Break Down)\n');
+
+    try {
+      // Test úkolu se skóre 2
+      const mediumTaskDescription = 'Update version number and create changelog';
+      
+      const analyzedTask = await this.orchestrator.analyzeTask(mediumTaskDescription);
+      
+      console.log(`   Task ID: ${analyzedTask.id}`);
+      console.log(`   Description: "${mediumTaskDescription}"`);
+      console.log(`   Should break down: ${analyzedTask.analysis.shouldBreakDown}`);
+      console.log(`   Complexity score: ${analyzedTask.analysis.complexity}/10`);
+      console.log(`   Reason: ${analyzedTask.analysis.reason}`);
+
+      if (!analyzedTask.analysis.shouldBreakDown) {
+        console.log('❌ Task with score 2+ should be flagged for breakdown');
+        return false;
+      }
+
+      console.log('✅ Medium complexity task test completed successfully!');
+      return true;
+
+    } catch (error) {
+      console.error('❌ Medium complexity task test failed:', error.message);
       return false;
     }
   }
@@ -184,7 +215,8 @@ class BoomerangTester {
     
     const tests = [
       { name: 'Basic Workflow', test: () => this.testBasicWorkflow() },
-      { name: 'Simple Task', test: () => this.testSimpleTask() },
+      { name: 'Simple Task (Score 1)', test: () => this.testSimpleTask() },
+      { name: 'Medium Complexity Task (Score 2+)', test: () => this.testMediumComplexityTask() },
       { name: 'Context Isolation', test: () => this.testContextIsolation() }
     ];
 

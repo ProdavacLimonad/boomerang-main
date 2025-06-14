@@ -1,11 +1,8 @@
 #!/usr/bin/env node
 
-import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-} from '@modelcontextprotocol/sdk/types.js';
+import { z } from 'zod';
 
 import { Storage } from './utils/storage.js';
 import { Orchestrator } from './tools/orchestrator.js';
@@ -20,17 +17,10 @@ class BoomerangMCPServer {
     this.logger = getLogger();
     this.logger.info('Initializing Boomerang MCP Server');
     
-    this.server = new Server(
-      {
-        name: 'boomerang-mcp-server',
-        version: '1.0.0',
-      },
-      {
-        capabilities: {
-          tools: {},
-        },
-      }
-    );
+    this.server = new McpServer({
+      name: 'boomerang-mcp-server',
+      version: '1.0.0',
+    });
 
     this.storage = new Storage('./storage');
     this.orchestrator = new Orchestrator(this.storage);
@@ -38,337 +28,318 @@ class BoomerangMCPServer {
     this.resultsMerger = new ResultsMerger(this.storage);
     this.webhookManager = getWebhookManager();
 
-    this.setupToolHandlers();
-    this.setupRequestHandlers();
+    this.setupTools();
     
     this.logger.info('Server initialized successfully');
   }
 
-  setupRequestHandlers() {
-    // Health check endpoint pro ověření funkčnosti
-    this.server.setRequestHandler('ping', async () => ({
-      status: 'ok',
-      name: 'boomerang-mcp-server',
-      version: '1.0.0',
-      uptime: process.uptime(),
-      timestamp: new Date().toISOString()
-    }));
-
-    this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
-      tools: [
-        {
-          name: 'boomerang_analyze_task',
-          description: 'Analyze a complex task and suggest breaking it into subtasks',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              description: {
-                type: 'string',
-                description: 'Description of the task to analyze',
-              },
-              projectContext: {
-                type: 'object',
-                description: 'Optional project context and constraints',
-                default: {},
-              },
-            },
-            required: ['description'],
-          },
-        },
-        {
-          name: 'boomerang_create_subtask',
-          description: 'Create a new subtask from the analysis',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              parentTaskId: {
-                type: 'string',
-                description: 'ID of the parent task',
-              },
-              subtaskConfig: {
-                type: 'object',
-                description: 'Configuration for the subtask',
-                properties: {
-                  title: { type: 'string' },
-                  description: { type: 'string' },
-                  type: { type: 'string' },
-                  priority: { type: 'string' },
-                },
-                required: ['title', 'description', 'type'],
-              },
-              contextToPass: {
-                type: 'object',
-                description: 'Context data to pass to the subtask',
-                default: {},
-              },
-            },
-            required: ['parentTaskId', 'subtaskConfig'],
-          },
-        },
-        {
-          name: 'boomerang_execute_subtask',
-          description: 'Execute a subtask in isolation',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              subtaskId: {
-                type: 'string',
-                description: 'ID of the subtask to execute',
-              },
-              executionMode: {
-                type: 'string',
-                description: 'Execution mode: simulation or real',
-                default: 'simulation',
-              },
-            },
-            required: ['subtaskId'],
-          },
-        },
-        {
-          name: 'boomerang_get_subtask_status',
-          description: 'Get the current status of a subtask',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              subtaskId: {
-                type: 'string',
-                description: 'ID of the subtask',
-              },
-            },
-            required: ['subtaskId'],
-          },
-        },
-        {
-          name: 'boomerang_merge_results',
-          description: 'Merge results from completed subtasks',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              parentTaskId: {
-                type: 'string',
-                description: 'ID of the parent task',
-              },
-            },
-            required: ['parentTaskId'],
-          },
-        },
-        {
-          name: 'boomerang_get_task_progress',
-          description: 'Get overall progress of a parent task',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              parentTaskId: {
-                type: 'string',
-                description: 'ID of the parent task',
-              },
-            },
-            required: ['parentTaskId'],
-          },
-        },
-      ],
-    }));
-
-    this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
-      const { name, arguments: args } = request.params;
-      
-      this.logger.debug(`Tool called: ${name}`, { args });
-      const timer = this.logger.startTimer(`Tool execution: ${name}`);
-
-      try {
-        // Validace vstupů
-        const validation = validator.validate(this.getValidationSchemaName(name), args);
-        if (!validation.valid) {
-          this.logger.warn(`Validation failed for ${name}`, { errors: validation.errors });
-          throw new Error(`Validation failed: ${validation.errors.join('; ')}`);
+  setupTools() {
+    // boomerang_analyze_task tool
+    this.server.tool(
+      'boomerang_analyze_task',
+      {
+        description: z.string().describe('Description of the task to analyze'),
+        projectContext: z.object({}).optional().describe('Optional project context and constraints')
+      },
+      async ({ description, projectContext = {} }) => {
+        try {
+          const validation = validator.validate('analyzeTask', { description, projectContext });
+          if (!validation.valid) {
+            throw new Error(`Validation failed: ${validation.errors.join('; ')}`);
+          }
+          
+          const result = await this.handleAnalyzeTask({ description, projectContext });
+          return {
+            content: [{ type: 'text', text: JSON.stringify(result, null, 2) }]
+          };
+        } catch (error) {
+          this.logger.error('Tool boomerang_analyze_task failed', { error: error.message });
+          return {
+            content: [{ type: 'text', text: `Error: ${error.message}` }]
+          };
         }
-        
-        switch (name) {
-          case 'boomerang_analyze_task':
-            return await this.handleAnalyzeTask(args);
-          case 'boomerang_create_subtask':
-            return await this.handleCreateSubtask(args);
-          case 'boomerang_execute_subtask':
-            return await this.handleExecuteSubtask(args);
-          case 'boomerang_get_subtask_status':
-            return await this.handleGetSubtaskStatus(args);
-          case 'boomerang_merge_results':
-            return await this.handleMergeResults(args);
-          case 'boomerang_get_task_progress':
-            return await this.handleGetTaskProgress(args);
-          default:
-            throw new Error(`Unknown tool: ${name}`);
-        }
-      } catch (error) {
-        this.logger.error(`Tool execution failed: ${name}`, { error: error.message });
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Error: ${error.message}`,
-            },
-          ],
-        };
       }
-    });
-  }
+    );
 
-  setupToolHandlers() {
-    // Tool handlers will be implemented here
+    // boomerang_create_subtask tool
+    this.server.tool(
+      'boomerang_create_subtask',
+      {
+        parentTaskId: z.string().describe('ID of the parent task'),
+        subtaskConfig: z.object({
+          title: z.string(),
+          description: z.string(),
+          type: z.string(),
+          priority: z.enum(['high', 'medium', 'low'])
+        }).describe('Configuration for the subtask'),
+        contextToPass: z.object({}).optional().describe('Context data to pass to the subtask')
+      },
+      async ({ parentTaskId, subtaskConfig, contextToPass = {} }) => {
+        try {
+          const validation = validator.validate('createSubtask', { parentTaskId, subtaskConfig, contextToPass });
+          if (!validation.valid) {
+            throw new Error(`Validation failed: ${validation.errors.join('; ')}`);
+          }
+          
+          const result = await this.handleCreateSubtask({ parentTaskId, subtaskConfig, contextToPass });
+          return {
+            content: [{ type: 'text', text: JSON.stringify(result, null, 2) }]
+          };
+        } catch (error) {
+          this.logger.error('Tool boomerang_create_subtask failed', { error: error.message });
+          return {
+            content: [{ type: 'text', text: `Error: ${error.message}` }]
+          };
+        }
+      }
+    );
+
+    // boomerang_execute_subtask tool
+    this.server.tool(
+      'boomerang_execute_subtask',
+      {
+        subtaskId: z.string().describe('ID of the subtask to execute'),
+        executionMode: z.enum(['simulation', 'real']).optional().describe('Execution mode (simulation or real)')
+      },
+      async ({ subtaskId, executionMode = 'simulation' }) => {
+        try {
+          const validation = validator.validate('executeSubtask', { subtaskId, executionMode });
+          if (!validation.valid) {
+            throw new Error(`Validation failed: ${validation.errors.join('; ')}`);
+          }
+          
+          const result = await this.handleExecuteSubtask({ subtaskId, executionMode });
+          return {
+            content: [{ type: 'text', text: JSON.stringify(result, null, 2) }]
+          };
+        } catch (error) {
+          this.logger.error('Tool boomerang_execute_subtask failed', { error: error.message });
+          return {
+            content: [{ type: 'text', text: `Error: ${error.message}` }]
+          };
+        }
+      }
+    );
+
+    // boomerang_get_subtask_status tool
+    this.server.tool(
+      'boomerang_get_subtask_status',
+      {
+        subtaskId: z.string().describe('ID of the subtask to check')
+      },
+      async ({ subtaskId }) => {
+        try {
+          const validation = validator.validate('getSubtaskStatus', { subtaskId });
+          if (!validation.valid) {
+            throw new Error(`Validation failed: ${validation.errors.join('; ')}`);
+          }
+          
+          const result = await this.handleGetSubtaskStatus({ subtaskId });
+          return {
+            content: [{ type: 'text', text: JSON.stringify(result, null, 2) }]
+          };
+        } catch (error) {
+          this.logger.error('Tool boomerang_get_subtask_status failed', { error: error.message });
+          return {
+            content: [{ type: 'text', text: `Error: ${error.message}` }]
+          };
+        }
+      }
+    );
+
+    // boomerang_merge_results tool
+    this.server.tool(
+      'boomerang_merge_results',
+      {
+        taskId: z.string().describe('ID of the main task')
+      },
+      async ({ taskId }) => {
+        try {
+          const validation = validator.validate('mergeResults', { taskId });
+          if (!validation.valid) {
+            throw new Error(`Validation failed: ${validation.errors.join('; ')}`);
+          }
+          
+          const result = await this.handleMergeResults({ taskId });
+          return {
+            content: [{ type: 'text', text: JSON.stringify(result, null, 2) }]
+          };
+        } catch (error) {
+          this.logger.error('Tool boomerang_merge_results failed', { error: error.message });
+          return {
+            content: [{ type: 'text', text: `Error: ${error.message}` }]
+          };
+        }
+      }
+    );
+
+    // boomerang_get_task_progress tool
+    this.server.tool(
+      'boomerang_get_task_progress',
+      {
+        taskId: z.string().describe('ID of the task to check progress for')
+      },
+      async ({ taskId }) => {
+        try {
+          const validation = validator.validate('getTaskProgress', { taskId });
+          if (!validation.valid) {
+            throw new Error(`Validation failed: ${validation.errors.join('; ')}`);
+          }
+          
+          const result = await this.handleGetTaskProgress({ taskId });
+          return {
+            content: [{ type: 'text', text: JSON.stringify(result, null, 2) }]
+          };
+        } catch (error) {
+          this.logger.error('Tool boomerang_get_task_progress failed', { error: error.message });
+          return {
+            content: [{ type: 'text', text: `Error: ${error.message}` }]
+          };
+        }
+      }
+    );
   }
 
   async handleAnalyzeTask(args) {
-    this.logger.info('Analyzing task', { description: args.description });
-    const task = await this.orchestrator.analyzeTask(args.description, args.projectContext);
-    this.logger.info('Task analysis completed', { taskId: task.id, complexity: task.analysis.complexity });
+    const timer = this.logger.startTimer('Tool execution: boomerang_analyze_task');
     
-    // Poslat webhook notifikaci
-    await this.webhookManager.notifyTaskCreated(task);
-    
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify({
-            taskId: task.id,
-            analysis: task.analysis,
-            message: task.analysis.shouldBreakDown 
-              ? 'Task complexity suggests breaking into subtasks'
-              : 'Task is simple enough to execute directly'
-          }, null, 2),
-        },
-      ],
-    };
+    try {
+      const analysis = await this.orchestrator.analyzeTask(args.description, args.projectContext);
+      
+      timer.done({ level: 'info', message: 'Task analysis completed successfully' });
+      
+      return {
+        status: 'success',
+        emoji: '🪃',
+        message: '🪃 Task analyzed using Boomerang pattern',
+        analysis,
+        timestamp: new Date().toISOString()
+      };
+    } catch (error) {
+      timer.done({ level: 'error', message: 'Task analysis failed' });
+      throw error;
+    }
   }
 
   async handleCreateSubtask(args) {
-    this.logger.info('Creating subtask', { parentTaskId: args.parentTaskId, title: args.subtaskConfig.title });
-    const subtask = await this.subtaskManager.createSubtask(
-      args.parentTaskId,
-      args.subtaskConfig,
-      args.contextToPass
-    );
-    this.logger.info('Subtask created', { subtaskId: subtask.id, parentTaskId: args.parentTaskId });
+    const timer = this.logger.startTimer('Tool execution: boomerang_create_subtask');
     
-    // Poslat webhook notifikaci
-    await this.webhookManager.notifySubtaskCreated(subtask);
-
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify({
-            subtaskId: subtask.id,
-            title: subtask.title,
-            status: subtask.status,
-            contextId: subtask.context.id,
-            message: 'Subtask created successfully with isolated context'
-          }, null, 2),
-        },
-      ],
-    };
+    try {
+      const subtask = await this.subtaskManager.createSubtask(
+        args.parentTaskId,
+        args.subtaskConfig,
+        args.contextToPass
+      );
+      
+      timer.done({ level: 'info', message: 'Subtask created successfully' });
+      
+      return {
+        status: 'success',
+        emoji: '🪃',
+        message: '🪃 Subtask created with specialized mode',
+        subtask,
+        timestamp: new Date().toISOString()
+      };
+    } catch (error) {
+      timer.done({ level: 'error', message: 'Subtask creation failed' });
+      throw error;
+    }
   }
 
   async handleExecuteSubtask(args) {
-    this.logger.info('Executing subtask', { subtaskId: args.subtaskId, mode: args.executionMode });
-    const result = await this.subtaskManager.executeSubtask(args.subtaskId, args.executionMode);
-    this.logger.info('Subtask execution completed', { subtaskId: args.subtaskId, status: result.status });
+    const timer = this.logger.startTimer('Tool execution: boomerang_execute_subtask');
     
-    // Poslat webhook notifikaci
-    await this.webhookManager.notifySubtaskExecuted(result, result.results);
-
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify({
-            subtaskId: result.id,
-            status: result.status,
-            results: result.results,
-            summary: result.summary,
-            message: 'Subtask execution completed'
-          }, null, 2),
-        },
-      ],
-    };
+    try {
+      const result = await this.subtaskManager.executeSubtask(args.subtaskId, args.executionMode);
+      
+      timer.done({ level: 'info', message: 'Subtask execution completed' });
+      
+      return {
+        status: 'success',
+        emoji: '🪃',
+        message: '🪃 Subtask executed in isolation',
+        result,
+        timestamp: new Date().toISOString()
+      };
+    } catch (error) {
+      timer.done({ level: 'error', message: 'Subtask execution failed' });
+      throw error;
+    }
   }
 
   async handleGetSubtaskStatus(args) {
-    const status = await this.subtaskManager.getSubtaskStatus(args.subtaskId);
-
-    if (!status) {
-      throw new Error(`Subtask ${args.subtaskId} not found`);
+    const timer = this.logger.startTimer('Tool execution: boomerang_get_subtask_status');
+    
+    try {
+      const status = await this.subtaskManager.getSubtaskStatus(args.subtaskId);
+      
+      timer.done({ level: 'info', message: 'Subtask status retrieved' });
+      
+      return {
+        status: 'success',
+        emoji: '🪃',
+        message: '🪃 Subtask status retrieved',
+        subtaskStatus: status,
+        timestamp: new Date().toISOString()
+      };
+    } catch (error) {
+      timer.done({ level: 'error', message: 'Failed to get subtask status' });
+      throw error;
     }
-
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify(status, null, 2),
-        },
-      ],
-    };
   }
 
   async handleMergeResults(args) {
-    const mergedData = await this.resultsMerger.mergeSubtaskResults(args.parentTaskId);
-
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify({
-            parentTaskId: args.parentTaskId,
-            finalSummary: mergedData.finalSummary,
-            mergedResults: mergedData.mergedResults,
-            message: `Successfully merged results from ${mergedData.subtaskCount} subtasks`
-          }, null, 2),
-        },
-      ],
-    };
+    const timer = this.logger.startTimer('Tool execution: boomerang_merge_results');
+    
+    try {
+      const mergedResults = await this.resultsMerger.mergeResults(args.taskId);
+      
+      timer.done({ level: 'info', message: 'Results merged successfully' });
+      
+      return {
+        status: 'success',
+        emoji: '🪃',
+        message: '🪃 Results merged with context flow',
+        mergedResults,
+        timestamp: new Date().toISOString()
+      };
+    } catch (error) {
+      timer.done({ level: 'error', message: 'Results merging failed' });
+      throw error;
+    }
   }
 
   async handleGetTaskProgress(args) {
-    const progress = await this.resultsMerger.getTaskProgress(args.parentTaskId);
-
-    if (!progress) {
-      throw new Error(`Task ${args.parentTaskId} not found`);
+    const timer = this.logger.startTimer('Tool execution: boomerang_get_task_progress');
+    
+    try {
+      const progress = await this.orchestrator.getTaskProgress(args.taskId);
+      
+      timer.done({ level: 'info', message: 'Task progress retrieved' });
+      
+      return {
+        status: 'success',
+        emoji: '🪃',
+        message: '🪃 Task progress calculated',
+        progress,
+        timestamp: new Date().toISOString()
+      };
+    } catch (error) {
+      timer.done({ level: 'error', message: 'Failed to get task progress' });
+      throw error;
     }
-
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify(progress, null, 2),
-        },
-      ],
-    };
   }
 
-  async run() {
+  async start() {
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
-    this.logger.info('Boomerang MCP Server running on stdio');
-    
-    // Poslat notifikaci o startu serveru
-    await this.webhookManager.notifyServerStarted();
-  }
-
-  /**
-   * Mapování názvů nástrojů na schémata validace
-   */
-  getValidationSchemaName(toolName) {
-    const mapping = {
-      'boomerang_analyze_task': 'analyzeTask',
-      'boomerang_create_subtask': 'createSubtask', 
-      'boomerang_execute_subtask': 'executeSubtask',
-      'boomerang_get_subtask_status': 'getSubtaskStatus',
-      'boomerang_merge_results': 'mergeResults',
-      'boomerang_get_task_progress': 'getTaskProgress'
-    };
-    return mapping[toolName] || null;
+    this.logger.info('Boomerang MCP Server started and connected via stdio');
   }
 }
 
+// Přidat Zod do dependencies
 const server = new BoomerangMCPServer();
-server.run().catch(console.error);
+server.start().catch(error => {
+  console.error('Failed to start server:', error);
+  process.exit(1);
+});

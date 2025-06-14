@@ -1,6 +1,7 @@
 import { ContextIsolation } from '../utils/context-isolation.js';
 import { getTaskCache } from '../utils/cache.js';
 import { getLogger } from '../utils/logger.js';
+import { SubtaskModes } from './subtask-modes.js';
 
 export class Orchestrator {
   constructor(storage) {
@@ -37,21 +38,23 @@ export class Orchestrator {
   breakDownTask(description, projectContext) {
     const complexity = this.assessComplexity(description);
     
-    if (complexity.score < 3) {
+    // Pouze úkoly se skóre 1 jsou považovány za jednoduché
+    if (complexity.score === 1) {
       return {
         complexity: complexity.score,
         shouldBreakDown: false,
-        reason: "Task is simple enough to execute directly",
+        reason: "Task is simple enough to execute directly (complexity score: 1)",
         suggestedSubtasks: []
       };
     }
-
+    
+    // Pro všechny ostatní úkoly (score 2+) použít Boomerang
     const subtasks = this.suggestSubtasks(description, complexity);
     
     return {
       complexity: complexity.score,
       shouldBreakDown: true,
-      reason: `Task complexity score: ${complexity.score}/10. Breaking down will improve focus and execution.`,
+      reason: `🪃 Task complexity score: ${complexity.score}/10. Using Boomerang pattern for optimal execution.`,
       suggestedSubtasks: subtasks,
       estimatedTime: this.estimateTime(subtasks)
     };
@@ -92,50 +95,80 @@ export class Orchestrator {
     const desc = description.toLowerCase();
 
     if (desc.includes('implement') || desc.includes('create')) {
+      const architectMode = SubtaskModes.selectBestMode(
+        "Analyze requirements and create implementation plan", 
+        "design"
+      );
+      
       subtasks.push({
         title: "Design and Planning",
         description: "Analyze requirements and create implementation plan",
         type: "design",
         priority: "high",
-        estimatedDuration: "15-30 minutes"
+        estimatedDuration: "15-30 minutes",
+        suggestedMode: architectMode
       });
 
+      const codeMode = SubtaskModes.selectBestMode(
+        "Implement the main functionality",
+        "implementation"
+      );
+      
       subtasks.push({
         title: "Core Implementation",
         description: "Implement the main functionality",
         type: "implementation",
         priority: "high",
-        estimatedDuration: "30-60 minutes"
+        estimatedDuration: "30-60 minutes",
+        suggestedMode: codeMode
       });
     }
 
     if (desc.includes('test')) {
+      const testMode = SubtaskModes.selectBestMode(
+        "Create and run tests for the implementation",
+        "testing"
+      );
+      
       subtasks.push({
         title: "Testing",
         description: "Create and run tests for the implementation",
         type: "testing",
         priority: "medium",
-        estimatedDuration: "15-30 minutes"
+        estimatedDuration: "15-30 minutes",
+        suggestedMode: testMode
       });
     }
 
     if (desc.includes('deploy') || desc.includes('build')) {
+      const deployMode = SubtaskModes.selectBestMode(
+        "Build the project and handle deployment",
+        "deployment"
+      );
+      
       subtasks.push({
         title: "Build and Deployment",
         description: "Build the project and handle deployment",
         type: "deployment",
         priority: "medium",
-        estimatedDuration: "10-20 minutes"
+        estimatedDuration: "10-20 minutes",
+        suggestedMode: deployMode
       });
     }
 
     if (subtasks.length === 0) {
+      const executionMode = SubtaskModes.selectBestMode(
+        description, // Použít originální popis
+        "execution"
+      );
+      
       subtasks.push({
         title: "Task Execution",
         description: "Execute the main task requirements",
         type: "execution",
         priority: "high",
-        estimatedDuration: "20-40 minutes"
+        estimatedDuration: "20-40 minutes",
+        suggestedMode: executionMode
       });
     }
 
@@ -152,5 +185,55 @@ export class Orchestrator {
     }, 0);
 
     return `${Math.round(totalMin)} minutes total`;
+  }
+
+  async getTaskProgress(taskId) {
+    const task = await this.storage.loadTask(taskId);
+    if (!task) {
+      throw new Error(`Task ${taskId} not found`);
+    }
+    
+    const subtaskProgresses = await Promise.all(
+      (task.subtasks || []).map(async (subtaskId) => {
+        const subtask = await this.storage.loadTask(subtaskId);
+        return {
+          id: subtaskId,
+          title: subtask?.title || 'Unknown',
+          status: subtask?.status || 'unknown',
+          mode: subtask?.mode?.name || 'N/A',
+          approvalStatus: subtask?.approvalStatus || 'N/A',
+          progress: this.calculateSubtaskProgress(subtask)
+        };
+      })
+    );
+    
+    const totalProgress = subtaskProgresses.length > 0 
+      ? subtaskProgresses.reduce((sum, st) => sum + st.progress, 0) / subtaskProgresses.length
+      : 0;
+    
+    return {
+      emoji: '🪃',
+      taskId,
+      description: task.description,
+      status: task.status,
+      totalProgress: Math.round(totalProgress),
+      subtasks: subtaskProgresses,
+      createdAt: task.createdAt,
+      completedSubtasks: subtaskProgresses.filter(st => st.progress === 100).length,
+      totalSubtasks: subtaskProgresses.length
+    };
+  }
+
+  calculateSubtaskProgress(subtask) {
+    if (!subtask) return 0;
+    switch (subtask.status) {
+      case 'created': return 0;
+      case 'approved': return 25;
+      case 'executing': return 50;
+      case 'completed': return 100;
+      case 'failed': return 0;
+      case 'rejected': return 0;
+      default: return 0;
+    }
   }
 }

@@ -323,4 +323,10 @@ export function getWebhookManager(options) {
   return defaultWebhookManager;
 }
 
+// Convenience function pro approval system
+export async function sendWebhookNotification(message) {
+  const manager = getWebhookManager();
+  return await manager.sendNotification('approval.notification', message);
+}
+
 export default getWebhookManager();
